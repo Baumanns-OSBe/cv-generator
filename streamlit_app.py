@@ -1,0 +1,194 @@
+import streamlit as st
+import openai
+import os
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.units import inch
+from io import BytesIO
+import json
+from datetime import datetime
+
+st.set_page_config(page_title="Bewerbungsdossier Generator", page_icon="📋", layout="wide")
+
+openai.api_key = os.environ.get("OPENAI_API_KEY", "")
+
+st.markdown("""
+<style>
+.stApp {background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);}
+.stButton>button {width: 100%; background-color: #3498db; color: white; padding: 15px; font-size: 18px; border-radius: 10px; font-weight: bold;}
+</style>
+""", unsafe_allow_html=True)
+
+st.title("📋 Bewerbungsdossier Generator")
+st.markdown("### Dein persönliches Profil professionell gestaltet")
+st.markdown("---")
+
+if 'step' not in st.session_state:
+    st.session_state.step = 1
+if 'user_data' not in st.session_state:
+    st.session_state.user_data = {}
+
+if st.session_state.step == 1:
+    st.header("👤 Wer bist du?")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("👨‍🎓 Jugendlich", key="youth", use_container_width=True):
+            st.session_state.user_data['type'] = 'jugendlich'
+            st.session_state.step = 2
+            st.rerun()
+    with col2:
+        if st.button("👨‍💼 Erwachsen", key="adult", use_container_width=True):
+            st.session_state.user_data['type'] = 'erwachsen'
+            st.session_state.step = 2
+            st.rerun()
+
+elif st.session_state.step == 2:
+    st.header("📝 Erzähle uns von dir")
+    user_type = st.session_state.user_data.get('type')
+    with st.form("interview_form"):
+        st.subheader("Persönliche Daten")
+        vorname = st.text_input("Vorname *")
+        nachname = st.text_input("Nachname *")
+        alter = st.number_input("Alter *", min_value=10, max_value=100, value=20)
+        if user_type == 'jugendlich':
+            st.subheader("Schule")
+            schule = st.text_input("Welche Schule besuchst du? *")
+            klasse = st.text_input("In welcher Klasse bist du? *")
+            st.subheader("Familie")
+            vater_name = st.text_input("Name deines Vaters")
+            vater_beruf = st.text_input("Beruf deines Vaters")
+            mutter_name = st.text_input("Name deiner Mutter")
+            mutter_beruf = st.text_input("Beruf deiner Mutter")
+            geschwister = st.number_input("Anzahl Geschwister", min_value=0, max_value=10, value=0)
+        else:
+            st.subheader("Berufliches")
+            ausbildung = st.text_input("Deine Ausbildung/Studium *")
+            position = st.text_input("Aktuelle Position *")
+            branche = st.text_input("Branche *")
+            erfahrung = st.number_input("Jahre Berufserfahrung *", min_value=0, max_value=50, value=5)
+            erfolge = st.text_area("Deine größten Erfolge", height=100)
+        st.subheader("Über dich")
+        hobbies = st.text_input("Deine Hobbys")
+        staerken = st.text_area("Deine Stärken *", height=100)
+        ziele = st.text_area("Deine Ziele *", height=100)
+        submitted = st.form_submit_button("Weiter →", use_container_width=True)
+        if submitted:
+            if not vorname or not nachname or not staerken or not ziele:
+                st.error("Bitte fülle alle Pflichtfelder aus!")
+            else:
+                st.session_state.user_data.update({'vorname': vorname, 'nachname': nachname, 'alter': alter, 'hobbies': hobbies, 'staerken': staerken, 'ziele': ziele})
+                if user_type == 'jugendlich':
+                    st.session_state.user_data.update({'schule': schule, 'klasse': klasse, 'vater_name': vater_name, 'vater_beruf': vater_beruf, 'mutter_name': mutter_name, 'mutter_beruf': mutter_beruf, 'geschwister': geschwister})
+                else:
+                    st.session_state.user_data.update({'ausbildung': ausbildung, 'position': position, 'branche': branche, 'erfahrung': erfahrung, 'erfolge': erfolge})
+                st.session_state.step = 3
+                st.rerun()
+
+elif st.session_state.step == 3:
+    st.header("🤖 KI analysiert deine Kompetenzen")
+    if 'analysis_done' not in st.session_state:
+        if not openai.api_key:
+            st.error("Kein OpenAI API Key gefunden!")
+            st.stop()
+        with st.spinner("Analysiere... (10-30 Sekunden)"):
+            try:
+                user_data = st.session_state.user_data
+                prompt = f"""Analysiere diese Person und finde TOP 3 Kompetenzen:
+Name: {user_data['vorname']} {user_data['nachname']}
+Alter: {user_data['alter']}
+Hobbys: {user_data.get('hobbies', 'N/A')}
+Stärken: {user_data['staerken']}
+Ziele: {user_data['ziele']}
+
+Antworte als JSON:
+{{"competencies": [{{"name": "...", "description": "...", "strength": 85}}], "quotes": [{{"text": "...", "author": "..."}}]}}"""
+                response = openai.ChatCompletion.create(model="gpt-4", messages=[{"role": "system", "content": "Du bist HR-Experte. Antworte nur JSON."}, {"role": "user", "content": prompt}], temperature=0.7)
+                content = response.choices[0].message.content.strip()
+                if content.startswith("```"):
+                    content = "\n".join(content.split("\n")[1:-1])
+                result = json.loads(content)
+                st.session_state.user_data['competencies'] = result['competencies']
+                st.session_state.user_data['quotes'] = result['quotes']
+                st.session_state.analysis_done = True
+                st.rerun()
+            except Exception as e:
+                st.error(f"Fehler: {str(e)}")
+                st.stop()
+    if st.session_state.get('analysis_done'):
+        st.success("Analyse abgeschlossen!")
+        competencies = st.session_state.user_data.get('competencies', [])
+        quotes = st.session_state.user_data.get('quotes', [])
+        st.subheader("Deine Top 3 Kompetenzen:")
+        for i, comp in enumerate(competencies, 1):
+            st.markdown(f"**{i}. {comp['name']}**")
+            st.write(comp['description'])
+            st.progress(comp['strength'] / 100)
+            st.markdown("---")
+        st.subheader("Passende Zitate:")
+        selected = st.radio("Wähle dein Zitat:", options=range(len(quotes)), format_func=lambda i: f'"{quotes[i]["text"]}" - {quotes[i]["author"]}')
+        st.session_state.user_data['selected_quote'] = quotes[selected]
+        if st.button("Weiter →", use_container_width=True):
+            st.session_state.step = 4
+            st.rerun()
+
+elif st.session_state.step == 4:
+    st.header("🎨 Wähle dein Design")
+    designs = {"Modern": {"colors": ["#1a1a1a", "#00d4ff"], "icon": "🔷"}, "Creative": {"colors": ["#ff6b9d", "#feca57"], "icon": "🌈"}, "Professional": {"colors": ["#2c3e50", "#3498db"], "icon": "📊"}, "Nature": {"colors": ["#27ae60", "#16a085"], "icon": "🌿"}}
+    cols = st.columns(4)
+    for idx, (name, data) in enumerate(designs.items()):
+        with cols[idx]:
+            st.markdown(f"<div style='text-align:center;font-size:3rem'>{data['icon']}</div>", unsafe_allow_html=True)
+            st.markdown(f"**{name}**")
+            st.markdown(f'<div style="background:linear-gradient(135deg,{data["colors"][0]},{data["colors"][1]});height:100px;border-radius:10px"></div>', unsafe_allow_html=True)
+            if st.button("Wählen", key=f"d{idx}", use_container_width=True):
+                st.session_state.user_data['design'] = name
+                st.session_state.user_data['colors'] = data['colors']
+                st.session_state.step = 5
+                st.rerun()
+
+elif st.session_state.step == 5:
+    st.header("📄 Dein Bewerbungsdossier")
+    user_data = st.session_state.user_data
+    colors = user_data.get('colors', ['#3498db', '#2ecc71'])
+    quote = user_data.get('selected_quote', {})
+    st.markdown(f'<div style="background:linear-gradient(135deg,{colors[0]},{colors[1]});padding:60px;border-radius:15px;color:white;text-align:center"><h1>Bewerbungsdossier</h1><h2>{user_data["vorname"]} {user_data["nachname"]}</h2><p style="font-style:italic">"{quote.get("text", "")}"</p><p>— {quote.get("author", "")}</p></div>', unsafe_allow_html=True)
+    if st.button("PDF erstellen", type="primary", use_container_width=True):
+        with st.spinner("Erstelle PDF..."):
+            try:
+                pdf_buffer = BytesIO()
+                doc = SimpleDocTemplate(pdf_buffer, pagesize=A4)
+                story = []
+                styles = getSampleStyleSheet()
+                story.append(Paragraph("Bewerbungsdossier", styles['Title']))
+                story.append(Spacer(1, 0.3*inch))
+                story.append(Paragraph(f"{user_data['vorname']} {user_data['nachname']}", styles['Heading1']))
+                story.append(Spacer(1, 0.5*inch))
+                story.append(Paragraph(f'"{quote.get("text", "")}"', styles['Normal']))
+                story.append(Paragraph(f'- {quote.get("author", "")}', styles['Normal']))
+                story.append(Spacer(1, 0.5*inch))
+                story.append(Paragraph("Persönliche Daten", styles['Heading2']))
+                info = f"Name: {user_data['vorname']} {user_data['nachname']}<br/>Alter: {user_data['alter']}"
+                story.append(Paragraph(info, styles['Normal']))
+                story.append(Spacer(1, 0.3*inch))
+                story.append(Paragraph("Top 3 Kompetenzen", styles['Heading2']))
+                for i, comp in enumerate(user_data.get('competencies', []), 1):
+                    story.append(Paragraph(f"{i}. {comp['name']} ({comp['strength']}%)", styles['Heading3']))
+                    story.append(Paragraph(comp['description'], styles['Normal']))
+                    story.append(Spacer(1, 0.2*inch))
+                doc.build(story)
+                pdf_buffer.seek(0)
+                st.download_button(label="PDF herunterladen", data=pdf_buffer, file_name=f"Bewerbungsdossier_{user_data['vorname']}_{user_data['nachname']}.pdf", mime="application/pdf")
+                st.success("PDF erstellt!")
+                st.balloons()
+            except Exception as e:
+                st.error(f"Fehler: {str(e)}")
+    if st.button("Neu starten"):
+        st.session_state.step = 1
+        st.session_state.user_data = {}
+        if 'analysis_done' in st.session_state:
+            del st.session_state.analysis_done
+        st.rerun()
+
+st.markdown("---")
+st.markdown("<div style='text-align:center;color:white'><p>Datenschutzfreundlich - DSGVO-konform</p></div>", unsafe_allow_html=True)
